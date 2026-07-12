@@ -145,7 +145,7 @@ textarea {
 }
 
 .detail-grid {
-  grid-template-columns: minmax(0, 1.45fr) minmax(320px, 0.85fr);
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .form-panel,
@@ -215,6 +215,7 @@ textarea {
 
 .upload-card,
 .model-strip,
+.gemini-copilot,
 .upload-feed,
 .document-list {
   display: grid;
@@ -432,8 +433,9 @@ textarea {
 }
 
 .answer-box {
-  min-height: 120px;
+  min-height: 240px;
   line-height: 1.6;
+  overflow-wrap: anywhere;
 }
 
 @keyframes lift {

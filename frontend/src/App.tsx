@@ -2,19 +2,15 @@ import { FormEvent, useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   askCase,
   createApplication,
-  getCaseReport,
   getCaseReportPdf,
   getDashboardStats,
-  getModelStatus,
   listApplications,
   submitDecision,
-  trainModels,
   uploadDocument,
   type DashboardStats,
   type DocumentUploadResponse,
   type LoanApplication,
   type LoanApplicationInput,
-  type ModelStatus,
 } from "./lib/api";
 
 const initialForm: LoanApplicationInput = {
@@ -48,10 +44,8 @@ function percentage(value: number) {
 function App() {
   const [applications, setApplications] = useState<LoanApplication[]>([]);
   const [stats, setStats] = useState<DashboardStats | null>(null);
-  const [modelStatuses, setModelStatuses] = useState<ModelStatus[]>([]);
   const [selectedId, setSelectedId] = useState<string>("");
   const [form, setForm] = useState<LoanApplicationInput>(initialForm);
-  const [reportText, setReportText] = useState("");
   const [question, setQuestion] = useState("Why was this case flagged?");
   const [answer, setAnswer] = useState("");
   const [loading, setLoading] = useState(false);
@@ -76,16 +70,19 @@ function App() {
     [applications, selectedId],
   );
 
-  async function refresh() {
-    const [nextApplications, nextStats, nextModelStatuses] = await Promise.all([
+  async function refresh(preferredApplicationId?: string) {
+    const [nextApplications, nextStats] = await Promise.all([
       listApplications(),
       getDashboardStats(),
-      getModelStatus(),
     ]);
     setApplications(nextApplications);
     setStats(nextStats);
-    setModelStatuses(nextModelStatuses);
-    if (!selectedId && nextApplications[0]) {
+    const preferredApplication = nextApplications.find(
+      (application) => application.id === preferredApplicationId,
+    );
+    if (preferredApplication) {
+      setSelectedId(preferredApplication.id);
+    } else if (!selectedId && nextApplications[0]) {
       setSelectedId(nextApplications[0].id);
     }
   }
@@ -96,15 +93,11 @@ function App() {
 
   useEffect(() => {
     if (!selectedApplication) {
-      setReportText("");
       return;
     }
 
     setRevisedAmount(String(selectedApplication.payload.requested_amount));
     setRevisedTenure(String(selectedApplication.payload.tenure_months));
-    void getCaseReport(selectedApplication.id)
-      .then(setReportText)
-      .catch(() => setReportText("Unable to load report preview."));
   }, [selectedApplication]);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
@@ -125,12 +118,13 @@ function App() {
         ...form,
         document_ids: stagedUploads.map((upload) => upload.document.id),
       });
+      setApplications((current) => [created, ...current]);
       setSelectedId(created.id);
       setStagedUploads([]);
       setStatusMessage(
         `Created case ${created.id} with ${created.documents.length} attached document(s).`,
       );
-      await refresh();
+      await refresh(created.id);
     } catch (error) {
       setStatusMessage(
         error instanceof Error
@@ -151,20 +145,13 @@ function App() {
     try {
       const uploads: DocumentUploadResponse[] = [];
       for (const file of Array.from(files)) {
-        const response = await uploadDocument(
-          file,
-          selectedApplication?.id ?? undefined,
-        );
+        const response = await uploadDocument(file);
         uploads.push(response);
         setRecentUploads((current) => [response, ...current].slice(0, 6));
-        if (!selectedApplication) {
-          setStagedUploads((current) => [response, ...current]);
-        }
+        setStagedUploads((current) => [response, ...current]);
       }
       setStatusMessage(
-        selectedApplication
-          ? `Attached ${uploads.length} file(s) to ${selectedApplication.payload.applicant_name}.`
-          : `Staged ${uploads.length} file(s) for the next application.`,
+        `Staged ${uploads.length} file(s) for the next application.`,
       );
       await refresh();
     } catch (error) {
@@ -231,24 +218,6 @@ function App() {
     } catch (error) {
       setAnswer(
         error instanceof Error ? error.message : "Unable to answer right now.",
-      );
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function handleRetrain() {
-    setLoading(true);
-    try {
-      const response = await trainModels();
-      setModelStatuses(response.model_statuses);
-      setStatusMessage(
-        `Retrained ${response.model_statuses.length} model services on ${response.sample_count} cases.`,
-      );
-      await refresh();
-    } catch (error) {
-      setStatusMessage(
-        error instanceof Error ? error.message : "Retraining failed.",
       );
     } finally {
       setLoading(false);
@@ -430,8 +399,8 @@ function App() {
             <div className="section-head compact">
               <h3>Document intake</h3>
               <p>
-                Uploaded files attach to the selected case if one is active,
-                otherwise they are staged for the draft application.
+                Uploaded files are staged here and attached when you submit
+                this new application.
               </p>
             </div>
 
@@ -481,32 +450,47 @@ function App() {
             <p>Sorted by latest submission in the backend dataset.</p>
           </div>
 
-          <div className="model-strip">
+          <div className="upload-feed">
             <div className="section-head compact">
-              <h3>Model services</h3>
-              <p>Trainable service status from the API.</p>
+              <h3>Recent uploads</h3>
+              <p>{statusMessage}</p>
             </div>
-            <div className="model-list">
-              {modelStatuses.map((model) => (
-                <div key={model.model_name} className="model-row">
-                  <strong>{model.model_name}</strong>
-                  <span>{model.trained ? "trained" : "untrained"}</span>
-                  <span>
-                    {model.accuracy !== null
-                      ? percentage(model.accuracy)
-                      : "n/a"}
-                  </span>
-                </div>
-              ))}
+            {recentUploads.map((item) => (
+              <div className="feed-row" key={item.document.id}>
+                <strong>{item.document.filename}</strong>
+                <span>{item.analysis}</span>
+              </div>
+            ))}
+          </div>
+
+          <div className="gemini-copilot">
+            <div className="section-head compact">
+              <h3>Ask Gemini</h3>
+              <p>
+                {selectedApplication
+                  ? `Ask about ${selectedApplication.payload.applicant_name}'s case.`
+                  : "Select a case from the queue to ask Gemini."}
+              </p>
             </div>
+            <textarea
+              rows={4}
+              value={question}
+              onChange={(event) => setQuestion(event.target.value)}
+              placeholder="Ask about risk signals, cash flow, or documents"
+              disabled={!selectedApplication}
+            />
             <button
-              className="secondary-button"
+              className="primary-button"
               type="button"
-              onClick={() => void handleRetrain()}
-              disabled={loading}
+              onClick={() => void handleAsk()}
+              disabled={loading || !selectedApplication || !question.trim()}
             >
-              Retrain models
+              Ask Gemini
             </button>
+            <p className="answer-box">
+              {answer ||
+                "Gemini's explanation will appear here after you ask a question."}
+            </p>
           </div>
 
           <div className="case-list">
@@ -533,18 +517,6 @@ function App() {
             ))}
           </div>
 
-          <div className="upload-feed">
-            <div className="section-head compact">
-              <h3>Recent uploads</h3>
-              <p>{statusMessage}</p>
-            </div>
-            {recentUploads.map((item) => (
-              <div className="feed-row" key={item.document.id}>
-                <strong>{item.document.filename}</strong>
-                <span>{item.analysis}</span>
-              </div>
-            ))}
-          </div>
         </aside>
       </section>
 
@@ -630,26 +602,6 @@ function App() {
               </section>
             </div>
 
-            <div className="document-list">
-              <h3>Uploaded documents</h3>
-              {selectedApplication.documents.length ? (
-                <ul className="explain-list">
-                  {selectedApplication.documents.map((document) => (
-                    <li key={document.id}>
-                      <span>{document.filename}</span>
-                      <strong>{document.document_kind}</strong>
-                    </li>
-                  ))}
-                </ul>
-              ) : (
-                <p className="rationale">No files attached to this case yet.</p>
-              )}
-            </div>
-
-            <p className="rationale">
-              {selectedApplication.scoring.document_rationale}
-            </p>
-
             <div className="decision-panel">
               <input
                 className="inline-input"
@@ -703,42 +655,6 @@ function App() {
               </div>
             </div>
           </article>
-
-          <aside className="panel chat-panel">
-            <div className="section-head">
-              <h2>Ask the co-pilot</h2>
-              <p>Get a plain-language answer for the selected case.</p>
-            </div>
-
-            <textarea
-              rows={5}
-              value={question}
-              onChange={(event) => setQuestion(event.target.value)}
-            />
-            <button
-              className="primary-button"
-              type="button"
-              onClick={() => void handleAsk()}
-              disabled={loading}
-            >
-              Explain this case
-            </button>
-            <p className="answer-box">
-              {answer ||
-                "The explanation will appear here after you ask a question."}
-            </p>
-
-            <div className="report-box">
-              <div className="section-head compact">
-                <h3>Report preview</h3>
-                <p>
-                  Gemini-generated markdown summary from the backend report
-                  endpoint.
-                </p>
-              </div>
-              <pre>{reportText}</pre>
-            </div>
-          </aside>
         </section>
       )}
     </main>

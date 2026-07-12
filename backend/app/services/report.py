@@ -57,7 +57,7 @@ Case data:
 
 def _gemini_summary(prompt: str) -> str:
     api_key = os.getenv("GEMINI_API_KEY")
-    model = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
+    model = os.getenv("GEMINI_MODEL", "gemini-flash-latest")
     if not api_key:
         raise RuntimeError("GEMINI_API_KEY is not set")
 
@@ -132,6 +132,47 @@ def generate_case_report(case: LoanApplication) -> str:
         summary = _fallback_summary(case)
 
     return f"{summary}\n\n## Metadata\n- Generated at: {generated_at}\n- Model version: {case.scoring.model_outputs[0].model_version if case.scoring.model_outputs else 'unknown'}\n- Source: Gemini API when available; otherwise local fallback\n- Decision mode: manual officer approval required\n"
+
+
+def generate_case_copilot_answer(case: LoanApplication, question: str) -> str:
+    prompt = f"""You are Loan IQ's case co-pilot assisting a human loan officer.
+
+Answer the officer's question concisely and in plain language. Use only the
+case data below. Do not make an approval or rejection decision; the final
+decision must remain with the officer. If the question cannot be answered
+from the data, say what information is needed.
+
+Officer question: {question}
+
+Case data:
+- Case ID: {case.id}
+- Applicant: {case.payload.applicant_name}
+- Purpose: {case.payload.purpose}
+- Final score: {case.scoring.final_score:.3f}
+- Risk band: {case.scoring.risk_band}
+- Recommendation: {case.scoring.recommendation}
+- Tabular score: {case.scoring.tabular_score:.3f}
+- Cash-flow score: {case.scoring.cash_flow_score:.3f}
+- Authenticity score: {case.scoring.authenticity_score:.3f}
+- Risk drivers: {json.dumps(case.scoring.shap_explanation)}
+- Cash-flow signals: {json.dumps(case.scoring.time_step_signal)}
+- Document rationale: {case.scoring.document_rationale}
+"""
+    try:
+        return _gemini_summary(prompt)
+    except Exception:
+        main_driver = (
+            case.scoring.model_outputs[0].model_name
+            if case.scoring.model_outputs
+            else "the model aggregate"
+        )
+        return (
+            f"This case is {case.scoring.risk_band.lower()} risk with a "
+            f"{case.scoring.final_score:.3f} final score. The main driver is "
+            f"{main_driver}; cash-flow is {case.scoring.cash_flow_score:.3f} "
+            f"and document authenticity is {case.scoring.authenticity_score:.3f}. "
+            "A loan officer must make the final decision."
+        )
 
 
 def _report_sections(case: LoanApplication) -> list[tuple[str, list[str]]]:

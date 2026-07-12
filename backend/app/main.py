@@ -3,8 +3,10 @@ from __future__ import annotations
 import os
 import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 from threading import Thread
 
+from dotenv import load_dotenv
 from fastapi import Body, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import PlainTextResponse, Response
@@ -22,14 +24,27 @@ from .schemas import (
     ModelTrainResponse,
 )
 from .services.documents import DocumentBlob, build_document_blob
-from .services.report import build_case_report_pdf, generate_case_report
+from .services.report import (
+    build_case_report_pdf,
+    generate_case_copilot_answer,
+    generate_case_report,
+)
 from .services.scoring import evaluate_application
 from .services.trainable_models import LoanModelRegistry, load_loan_approval_dataset
+
+load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 
 app = FastAPI(title="Loan IQ API", version="0.2.0")
 
 default_cors_origins = "http://localhost:5173,http://127.0.0.1:5173"
-cors_origins = [origin.strip() for origin in os.getenv("CORS_ORIGINS", default_cors_origins).split(",") if origin.strip()]
+configured_cors_origins = os.getenv("CORS_ORIGINS", "")
+cors_origins = list(
+    dict.fromkeys(
+        origin.strip()
+        for origin in f"{configured_cors_origins},{default_cors_origins}".split(",")
+        if origin.strip()
+    )
+)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=cors_origins,
@@ -326,14 +341,7 @@ def chat_about_case(application_id: str, request: ChatRequest) -> ChatResponse:
     if record is None:
         raise HTTPException(status_code=404, detail="Application not found")
 
-    main_driver = record.scoring.model_outputs[0].model_name if record.scoring.model_outputs else "the model aggregate"
-    answer = (
-        f"This case is {record.scoring.risk_band.lower()} risk with a {record.scoring.final_score:.3f} final score. "
-        f"The main driver is {main_driver}, the cash-flow signal is {record.scoring.cash_flow_score:.3f}, "
-        f"and the document authenticity score is {record.scoring.authenticity_score:.3f}. "
-        f"Question received: {request.question}"
-    )
-    return ChatResponse(answer=answer)
+    return ChatResponse(answer=generate_case_copilot_answer(record, request.question))
 
 
 @app.get("/api/dashboard/stats", response_model=DashboardStats)

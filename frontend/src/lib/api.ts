@@ -134,9 +134,7 @@ export interface ModelTrainResponse {
   sample_count: number;
 }
 
-const API_BASE =
-  import.meta.env.VITE_API_URL ??
-  `${window.location.protocol}//${window.location.hostname}:8000`;
+const API_BASE = import.meta.env.VITE_API_URL ?? "";
 
 async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, {
